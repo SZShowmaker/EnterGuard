@@ -1,4 +1,4 @@
-# DingDing Guard - 消息发送二次确认
+# EnterGuard - 消息发送二次确认
 
 在 Windows 下, 当你在钉钉/飞书/微信中按 `Enter` 发送消息前, 弹出确认框, 防止手滑把消息发错群。
 
@@ -15,7 +15,7 @@
 
 ```bat
 # 1. 克隆或拷贝项目到 Windows
-cd dingding_message_send_double_check
+cd EnterGuard
 
 # 2. 安装依赖 (需要 Python 3.10+)
 pip install -r requirements.txt
