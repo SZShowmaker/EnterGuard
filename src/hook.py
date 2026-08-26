@@ -101,6 +101,15 @@ if IS_WINDOWS:
         user32.SendInput.restype = wintypes.UINT
         user32.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ULONG_PTR]
         user32.keybd_event.restype = None
+        # 焦点恢复 / 线程消息相关声明, 64位下需正确签名避免 handle 截断
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.SetForegroundWindow.restype = wintypes.BOOL
+        user32.SetFocus.argtypes = [wintypes.HWND]
+        user32.SetFocus.restype = wintypes.HWND
+        kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+        user32.PostThreadMessageW.argtypes = [wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.PostThreadMessageW.restype = wintypes.BOOL
     except Exception:
         pass
 
@@ -116,18 +125,17 @@ def send_enter():
         inputs = (INPUT * 2)(inp_down, inp_up)
         # 注意: argtypes 已设为 c_void_p, 传数组本体即可, ctypes 会自动转为指针
         n = user32.SendInput(2, inputs, ctypes.sizeof(INPUT))
-        if n != 2:
+        if n == 2:
+            print(f"[hook] SendInput ok, sent {n}/2")
+        else:
             err = kernel32.GetLastError()
-            print(f"[hook] SendInput failed, sent {n}/2 err={err} sizeof(INPUT)={ctypes.sizeof(INPUT)}")
-            # 备用方案: keybd_event
+            print(f"[hook] SendInput partial/failed, sent {n}/2 err={err} sizeof(INPUT)={ctypes.sizeof(INPUT)}")
+            # 备用方案: keybd_event (完整 down+up). 任何 partial(n!=2) 都走这里并返回,
+            # 避免 n==1 时 SendInput 残留的 down 与 keybd_event 的 down 叠加导致按键卡住
             print(f"[hook] fallback to keybd_event")
             user32.keybd_event(VK_RETURN, 0, 0, 0)
             user32.keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0)
-            if n == 0:
-                # 若 SendInput 完全失败, 依赖 fallback 已发送, 视为成功
-                return
-        else:
-            print(f"[hook] SendInput ok, sent {n}/2")
+            return
     except Exception as e:
         print(f"[hook] send_enter exception: {e}")
         try:
@@ -172,12 +180,14 @@ class HookManager:
         return False
 
     def _is_foreground_target_app(self):
-        """判断前台窗口是否是已启用的目标应用, 返回 (is_target, app_key, title, class_name)"""
+        """判断前台窗口是否是已启用的目标应用, 返回 (is_target, app_key, title, class_name, hwnd)
+        hwnd 用于弹窗关闭后把焦点切回原应用, 否则重放的 Enter 会发给 Guard 主窗口
+        """
         if not IS_WINDOWS:
-            return False, None, "", ""
+            return False, None, "", "", 0
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
-            return False, None, "", ""
+            return False, None, "", "", 0
         # 标题
         length = user32.GetWindowTextLengthW(hwnd)
         buf = ctypes.create_unicode_buffer(length + 1)
@@ -190,12 +200,12 @@ class HookManager:
 
         # 总开关
         if not self.config.master_enabled:
-            return False, None, title, class_name
+            return False, None, title, class_name, hwnd
 
         app_key, app = self.config.get_app_by_window(title, class_name)
         if app_key:
-            return True, app_key, title, class_name
-        return False, None, title, class_name
+            return True, app_key, title, class_name, hwnd
+        return False, None, title, class_name, hwnd
 
     def set_dialog_open(self, open_: bool):
         with self._dialog_lock:
@@ -220,10 +230,10 @@ class HookManager:
                     if self._is_modifier_pressed():
                         pass
                     else:
-                        is_target, app_key, title, cls = self._is_foreground_target_app()
+                        is_target, app_key, title, cls, hwnd = self._is_foreground_target_app()
                         if is_target:
                             # 命中! 吞掉并通知主线程, 并立即标记弹窗将打开
-                            self.log(f"[hook] 拦截 Enter | 应用={app_key} | 标题={title} | 类名={cls}")
+                            self.log(f"[hook] 拦截 Enter | 应用={app_key} | 标题={title} | 类名={cls} | hwnd={hwnd}")
                             with self._dialog_lock:
                                 self.dialog_open = True
                             # put 事件, 主线程会做 UIA 读取+弹窗
@@ -234,12 +244,14 @@ class HookManager:
                                         "app_key": app_key,
                                         "title": title,
                                         "class_name": cls,
+                                        "hwnd": hwnd,
                                     }
                                 )
                             except queue.Full:
-                                self.log("[hook] queue full, drop event")
+                                self.log("[hook] queue full, drop event (放行, 不吞键)")
                                 with self._dialog_lock:
                                     self.dialog_open = False
+                                return 0  # 队列满时放行, 避免静默吞掉用户按键
                             return 1  # 吞掉, 不传给钉钉
             except Exception as e:
                 self.log(f"[hook] proc error: {e}")
@@ -344,14 +356,28 @@ class HookManager:
             self.thread.join(timeout=1.5)
         self.log("[hook] stopped")
 
-    def replay_enter(self, app_key=""):
-        """供主线程在用户确认后调用, 重放Enter"""
+    def replay_enter(self, app_key="", target_hwnd=None):
+        """供主线程在用户确认后调用, 重放 Enter
+
+        target_hwnd: 钩子拦截时捕获的原前台窗口 hwnd. 弹窗是 Toplevel(parent=root),
+                     关闭后焦点会回到 Guard 主窗口, 必须显式切回原应用,
+                     否则 SendInput 的 Enter 会发给 Guard 自己而非钉钉/飞书/微信.
+        """
         if self.config.test_mode:
             self.log("[hook] 测试模式开启, 不重放Enter (安全, 不会真发送)")
             return
         target = app_key or "目标"
         self.log(f"[hook] 重放 Enter -> {target}")
-        # 稍微延迟, 确保确认框已关闭且焦点回到原窗口
+        # 焦点恢复: handle_intercept 已切过一次, 这里 SendInput 前再强化一次,
+        # 防止 0.12s 延迟期间焦点被别的窗口抢走
+        if IS_WINDOWS and target_hwnd:
+            try:
+                user32.SetForegroundWindow(target_hwnd)
+                user32.SetFocus(target_hwnd)
+                self.log(f"[hook] 已恢复焦点到 hwnd={target_hwnd}")
+            except Exception as e:
+                self.log(f"[hook] 恢复焦点失败: {e}")
+        # 稍微延迟, 确认框已关闭且焦点切换生效
         import time
 
         time.sleep(0.12)

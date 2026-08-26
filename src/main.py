@@ -358,16 +358,24 @@ class App:
                     self.log(f"[intercept] 已清理 {cleared} 个堆积事件")
             except:
                 pass
-            # 确保焦点回到原应用, 下次 Enter 能正常拦截
+            # 注意: 不要 self.root.focus_force() — 那会把焦点拉回 Guard 主窗口,
+            # 导致 replay_enter 的 SendInput 把 Enter 发给 Guard 而非原应用.
+            # 焦点恢复由下面的 SetForegroundWindow + replay_enter 内部处理.
+
+        # 焦点切回原应用窗口 (弹窗是 Toplevel(root), 关闭后焦点默认回到 Guard, 必须显式切回)
+        # 否则确认后 SendInput 的 Enter 会发给 Guard 自己, 取消后用户也无法继续编辑原消息
+        evt_hwnd = evt.get("hwnd", 0)
+        if IS_WINDOWS and evt_hwnd:
             try:
-                self.root.focus_force()
-                self.root.update()
-            except:
-                pass
+                import ctypes
+                ctypes.windll.user32.SetForegroundWindow(evt_hwnd)
+                ctypes.windll.user32.SetFocus(evt_hwnd)
+            except Exception as e:
+                self.log(f"[intercept] 恢复焦点失败: {e}")
 
         if confirmed:
             self.log(f"[user] 确认发送 -> {group_name} ({app_key})")
-            self.hook.replay_enter(app_key)
+            self.hook.replay_enter(app_key, target_hwnd=evt_hwnd)
         else:
             self.log(f"[user] 取消发送 -> {group_name}")
 

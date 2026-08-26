@@ -149,27 +149,73 @@ def show_confirm_dialog(parent, app_key: str, app_display: str, group_name: str,
     except:
         dialog.geometry(f"{req_w}x{req_h}")
     dialog.deiconify()  # 显示
-    # 强制前台, 否则 Windows 焦点窃取保护会使弹窗不获焦, 导致 Enter 仍进微信而被钩子吃掉
-    # 表现为首次弹窗按 Enter 无反应需鼠标
+    # 强制前台并夺取键盘焦点, 否则 Windows 前台锁会让原应用(微信/钉钉)保留前台,
+    # 钩子虽因 dialog_open=True 放行 Enter, 但按键进入原应用把消息发出, 弹窗却收不到 Enter 无法确认.
+    # 单纯 SetForegroundWindow 会被前台锁拦截(只闪烁任务栏), 必须用 AttachThreadInput 合并输入队列绕过.
     try:
         dialog.lift()
         dialog.attributes("-topmost", True)
         dialog.focus_force()
-        # Win32 强制前台 (绕过前台锁)
         if IS_WINDOWS:
             import ctypes
+            from ctypes import wintypes as _wt
+
+            _u = ctypes.windll.user32
+            _k = ctypes.windll.kernel32
+            _u.GetWindowThreadProcessId.restype = _wt.DWORD
+            _u.GetWindowThreadProcessId.argtypes = [_wt.HWND, ctypes.POINTER(_wt.DWORD)]
+            _k.GetCurrentThreadId.restype = _wt.DWORD
+            _u.AttachThreadInput.restype = _wt.BOOL
+            _u.AttachThreadInput.argtypes = [_wt.DWORD, _wt.DWORD, _wt.BOOL]
+            _u.SetForegroundWindow.restype = _wt.BOOL
+            _u.SetForegroundWindow.argtypes = [_wt.HWND]
+            _u.BringWindowToTop.restype = _wt.BOOL
+            _u.BringWindowToTop.argtypes = [_wt.HWND]
+            _u.SetFocus.restype = _wt.HWND
+            _u.SetFocus.argtypes = [_wt.HWND]
+            _u.GetAncestor.restype = _wt.HWND
+            _u.GetAncestor.argtypes = [_wt.HWND, _wt.UINT]
+            _u.ShowWindow.restype = _wt.BOOL
+            _u.ShowWindow.argtypes = [_wt.HWND, ctypes.c_int]
 
             hwnd = dialog.winfo_id()
-            # winfo_id 在 Tkinter/Windows 下即 HWND
-            ctypes.windll.user32.SetForegroundWindow(hwnd)
-            ctypes.windll.user32.BringWindowToTop(hwnd)
-            ctypes.windll.user32.SetFocus(hwnd)
-    except:
-        pass
+            # winfo_id 对 Toplevel 一般即顶级 HWND, 用 GetAncestor(GA_ROOT) 兜底取根窗口
+            top_hwnd = _u.GetAncestor(hwnd, 2) or hwnd  # GA_ROOT = 2
+            fg = _u.GetForegroundWindow()
+            my_tid = _k.GetCurrentThreadId()
+            fg_tid = 0
+            attached = False
+            # 合并本线程与前台线程的输入队列, 使 SetForegroundWindow 被允许
+            if fg and fg != top_hwnd:
+                fg_tid = _u.GetWindowThreadProcessId(fg, None)
+                if fg_tid and fg_tid != my_tid:
+                    attached = bool(_u.AttachThreadInput(my_tid, fg_tid, True))
+            try:
+                _u.ShowWindow(top_hwnd, 9)  # SW_RESTORE = 9, 防止最小化状态下无法激活
+                _u.SetForegroundWindow(top_hwnd)
+                _u.BringWindowToTop(top_hwnd)
+                _u.SetFocus(top_hwnd)
+            finally:
+                if attached and fg_tid:
+                    _u.AttachThreadInput(my_tid, fg_tid, False)
+    except Exception as e:
+        print(f"[dialog] focus setup failed: {e}")
     dialog.grab_set()  # 模态 (需在 deiconify 后)
-    # 再次确保焦点在确认按钮
+    # 再次确保焦点在确认按钮 (延迟一点, 等 Win32 前台切换生效)
+    def _reassert_focus():
+        try:
+            btn_send.focus_force()
+            if IS_WINDOWS:
+                import ctypes
+                hwnd = dialog.winfo_id()
+                ctypes.windll.user32.SetForegroundWindow(
+                    ctypes.windll.user32.GetAncestor(hwnd, 2) or hwnd
+                )
+        except Exception:
+            pass
+
     try:
-        dialog.after(30, lambda: btn_send.focus_force())
+        dialog.after(30, _reassert_focus)
     except:
         pass
 

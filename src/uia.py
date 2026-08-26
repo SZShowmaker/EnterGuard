@@ -43,7 +43,7 @@ def extract_group_name_from_title(title: str) -> str:
     for suffix in [" - 钉钉", " - DingTalk", " - 飞书", " - Feishu", " - Lark", " - 微信", " - WeChat"]:
         if title.endswith(suffix):
             name = title[: -len(suffix)].strip()
-            return name if name else title
+            return name if name else "未知会话"
     # 有些版本标题就是群名本身
     if " - " in title:
         return title.split(" - ")[0].strip()
@@ -144,7 +144,9 @@ def inspect_current_window():
                     for gc in child.GetChildren()[:5]:
                         val = ""
                         try:
-                            val = gc.GetValuePattern().Value[:50] if gc.GetValuePattern() else ""
+                            vp = gc.GetValuePattern()
+                            if vp and vp.Value:
+                                val = vp.Value[:50]
                         except:
                             pass
                         print(f"     |- {gc.ControlTypeName} Name='{gc.Name}' Value='{val}'")
