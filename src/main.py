@@ -44,6 +44,11 @@ class App:
         self.risk = RiskAssessor(
             switch_threshold_seconds=self.config.switch_threshold_seconds,
             sensitive_words=self.config.sensitive_words,
+            at_trigger_mode=self.config.at_trigger_mode,
+            at_all_keywords=self.config.at_all_keywords,
+            at_extra_keywords=self.config.at_extra_keywords,
+            high_risk_group_keywords=self.config.high_risk_group_keywords,
+            quiet_hours=self.config.quiet_hours,
         )
 
         self.root.title("消息发送二次确认 - DingDing Guard")
@@ -142,6 +147,56 @@ class App:
         ttk.Label(
             row2,
             text="消息含敏感词时必弹 (大小写不敏感, 子串匹配)",
+            font=("微软雅黑", 7),
+            foreground="#6b7280",
+        ).pack(side="left", padx=(8, 0))
+
+        # @提及检测
+        row3 = ttk.Frame(risk_frame)
+        row3.pack(fill="x", pady=(6, 0))
+        ttk.Label(row3, text="@检测:", font=("微软雅黑", 8)).pack(side="left")
+        self.at_mode_var = tk.StringVar(value=self.config.at_trigger_mode)
+        at_combo = ttk.Combobox(row3, textvariable=self.at_mode_var, width=8, state="readonly",
+                                values=["all", "any", "off"], font=("微软雅黑", 8))
+        at_combo.pack(side="left", padx=(4, 8))
+        at_combo.bind("<<ComboboxSelected>>", lambda e: self.save_at_mode())
+        ttk.Button(row3, text="编辑@词", command=self.edit_at_keywords).pack(side="left")
+        ttk.Label(
+            row3,
+            text="all=仅@所有人弹  any=任何@都弹  off=关闭; @词含@所有人/@all/@全体+自定义",
+            font=("微软雅黑", 7),
+            foreground="#6b7280",
+        ).pack(side="left", padx=(8, 0))
+
+        # 高危群
+        row4 = ttk.Frame(risk_frame)
+        row4.pack(fill="x", pady=(6, 0))
+        ttk.Label(row4, text="高危群:", font=("微软雅黑", 8)).pack(side="left")
+        self.group_kw_count_var = tk.StringVar(value=f"当前 {len(self.config.high_risk_group_keywords)} 个")
+        ttk.Label(row4, textvariable=self.group_kw_count_var, font=("微软雅黑", 8), foreground="#2563eb").pack(side="left", padx=(4, 8))
+        ttk.Button(row4, text="编辑高危群词", command=self.edit_high_risk_groups).pack(side="left")
+        ttk.Label(
+            row4,
+            text="群名命中则每次必弹 (不受对象变化逻辑管)",
+            font=("微软雅黑", 7),
+            foreground="#6b7280",
+        ).pack(side="left", padx=(8, 0))
+
+        # 静默时段
+        row5 = ttk.Frame(risk_frame)
+        row5.pack(fill="x", pady=(6, 0))
+        self.quiet_enabled_var = tk.BooleanVar(value=self.config.quiet_hours.get("enabled", False))
+        ttk.Checkbutton(row5, text="静默时段", variable=self.quiet_enabled_var, command=self.save_quiet_hours).pack(side="left")
+        ttk.Label(row5, text="起:", font=("微软雅黑", 8)).pack(side="left", padx=(6, 0))
+        self.quiet_start_var = tk.StringVar(value=self.config.quiet_hours.get("start", "22:00"))
+        ttk.Entry(row5, textvariable=self.quiet_start_var, width=6, font=("微软雅黑", 8)).pack(side="left", padx=(2, 6))
+        ttk.Label(row5, text="止:", font=("微软雅黑", 8)).pack(side="left", padx=(0, 0))
+        self.quiet_end_var = tk.StringVar(value=self.config.quiet_hours.get("end", "08:00"))
+        ttk.Entry(row5, textvariable=self.quiet_end_var, width=6, font=("微软雅黑", 8)).pack(side="left", padx=(2, 8))
+        ttk.Button(row5, text="保存", width=6, command=self.save_quiet_hours).pack(side="left")
+        ttk.Label(
+            row5,
+            text="时段内一律高风险 (支持跨午夜, 如 22:00~08:00)",
             font=("微软雅黑", 7),
             foreground="#6b7280",
         ).pack(side="left", padx=(8, 0))
@@ -292,8 +347,56 @@ class App:
 
     def edit_sensitive_words(self):
         """弹出敏感词编辑窗口, 每行一个词"""
+        def on_save(words):
+            self.config.sensitive_words = words
+            self.config.save()
+            self.risk.update_config(sensitive_words=words)
+            self.words_count_var.set(f"当前 {len(words)} 个")
+            self.log(f"敏感词已更新 -> {len(words)} 个")
+
+        self._edit_word_list(
+            title="编辑敏感词 (每行一个)",
+            hint="每行一个词, 大小写不敏感, 子串匹配. 空行自动忽略",
+            initial=list(self.config.sensitive_words),
+            on_save=on_save,
+        )
+
+    def edit_at_keywords(self):
+        """编辑@触发词: 上半区@所有人关键词(只读说明), 下半区用户自定义@词"""
+        def on_save(words):
+            self.config.at_extra_keywords = words
+            self.config.save()
+            self.risk.update_config(at_extra_keywords=words)
+            self.log(f"@自定义词已更新 -> {len(words)} 个 (mode=all 时生效)")
+
+        self._edit_word_list(
+            title="编辑自定义@触发词 (每行一个)",
+            hint=f"mode=all 时, 除内置 [{', '.join(self.config.at_all_keywords)}] 外, 还匹配这里的词\n"
+                 f"如填 @老板/@张三; mode=any 时任何@都弹, 此列表不生效; 每行一个, 空行忽略",
+            initial=list(self.config.at_extra_keywords),
+            on_save=on_save,
+        )
+
+    def edit_high_risk_groups(self):
+        """编辑高危群关键词"""
+        def on_save(words):
+            self.config.high_risk_group_keywords = words
+            self.config.save()
+            self.risk.update_config(high_risk_group_keywords=words)
+            self.group_kw_count_var.set(f"当前 {len(words)} 个")
+            self.log(f"高危群词已更新 -> {len(words)} 个")
+
+        self._edit_word_list(
+            title="编辑高危群关键词 (每行一个)",
+            hint="群名命中任一关键词则每次发送都弹 (不受对象变化逻辑管)\n如: 客户/外部/全员/领导; 每行一个, 空行忽略",
+            initial=list(self.config.high_risk_group_keywords),
+            on_save=on_save,
+        )
+
+    def _edit_word_list(self, title, hint, initial, on_save):
+        """通用列表编辑器弹窗: 每行一个词. on_save(words) 在保存时回调."""
         win = tk.Toplevel(self.root)
-        win.title("编辑敏感词 (每行一个)")
+        win.title(title)
         win.attributes("-topmost", True)
         win.geometry("520x480")
         win.minsize(440, 380)
@@ -303,37 +406,66 @@ class App:
         except:
             pass
 
-        ttk.Label(win, text="每行一个词, 大小写不敏感, 子串匹配. 空行自动忽略", font=("微软雅黑", 8), foreground="#6b7280").pack(anchor="w", padx=10, pady=(8, 4))
+        ttk.Label(win, text=hint, font=("微软雅黑", 8), foreground="#6b7280", justify="left").pack(anchor="w", padx=10, pady=(8, 4))
 
-        result = {"saved": False}
-
-        def on_save():
+        def do_save():
             raw = txt.get("1.0", "end").splitlines()
             words = [w.strip() for w in raw if w.strip()]
-            self.config.sensitive_words = words
-            self.config.save()
-            self.risk.update_config(sensitive_words=words)
-            self.words_count_var.set(f"当前 {len(words)} 个")
-            self.log(f"敏感词已更新 -> {len(words)} 个")
-            result["saved"] = True
+            try:
+                on_save(words)
+            except Exception as e:
+                self.log(f"保存失败: {e}")
             win.destroy()
 
-        def on_cancel():
+        def do_cancel():
             win.destroy()
 
-        # 关键: 先 pack 底部按钮区 (side=bottom), 再 pack 可扩展的 Text.
-        # 否则 Text 的 expand=True 会先占满整个空间, 后 pack 的按钮区被挤到可视区外.
+        # 先 pack 底部按钮 (side=bottom), 再 pack 可扩展 Text, 否则按钮被挤出可视区
         btns = ttk.Frame(win)
         btns.pack(fill="x", side="bottom", padx=10, pady=(4, 10))
-        ttk.Button(btns, text="保存", command=on_save).pack(side="right", padx=(4, 0))
-        ttk.Button(btns, text="取消", command=on_cancel).pack(side="right")
+        ttk.Button(btns, text="保存", command=do_save).pack(side="right", padx=(4, 0))
+        ttk.Button(btns, text="取消", command=do_cancel).pack(side="right")
 
         txt = tk.Text(win, wrap="word", font=("微软雅黑", 9))
         txt.pack(fill="both", expand=True, padx=10, pady=(0, 4))
-        for w in self.config.sensitive_words:
+        for w in initial:
             txt.insert("end", w + "\n")
 
         self.root.wait_window(win)
+
+    def save_at_mode(self):
+        val = self.at_mode_var.get()
+        self.config.at_trigger_mode = val
+        self.config.save()
+        self.risk.update_config(at_trigger_mode=val)
+        desc = {"all": "仅@所有人弹", "any": "任何@都弹", "off": "关闭@检测"}[val]
+        self.log(f"@检测模式 -> {val} ({desc})")
+
+    def save_quiet_hours(self):
+        enabled = bool(self.quiet_enabled_var.get())
+        start = self.quiet_start_var.get().strip()
+        end = self.quiet_end_var.get().strip()
+        # 简单校验 HH:MM
+        def _ok(t):
+            parts = t.split(":")
+            if len(parts) != 2:
+                return False
+            try:
+                h, m = int(parts[0]), int(parts[1])
+                return 0 <= h < 24 and 0 <= m < 60
+            except ValueError:
+                return False
+        if not (_ok(start) and _ok(end)):
+            messagebox.showwarning("提示", f"时间格式应为 HH:MM, 如 22:00\n当前: 起={start!r} 止={end!r}", parent=self.root)
+            self.quiet_start_var.set(self.config.quiet_hours.get("start", "22:00"))
+            self.quiet_end_var.set(self.config.quiet_hours.get("end", "08:00"))
+            self.quiet_enabled_var.set(self.config.quiet_hours.get("enabled", False))
+            return
+        qh = {"enabled": enabled, "start": start, "end": end}
+        self.config.quiet_hours = qh
+        self.config.save()
+        self.risk.update_config(quiet_hours=qh)
+        self.log(f"静默时段 -> {'开启' if enabled else '关闭'} ({start}~{end})")
 
     def clear_log(self):
         self.log_text.configure(state="normal")

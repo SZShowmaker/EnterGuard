@@ -125,10 +125,156 @@ def test_wechat_app_level_only():
 def test_update_config():
     print("=== test_update_config ===")
     r = RiskAssessor(switch_threshold_seconds=0, sensitive_words=["工资"])
-    r.update_config(switch_threshold_seconds=-1, sensitive_words=["密码"])
+    r.update_config(switch_threshold_seconds=-1, sensitive_words=["密码"],
+                    at_trigger_mode="any", at_all_keywords=["@all"], at_extra_keywords=["@老板"],
+                    high_risk_group_keywords=["客户"], quiet_hours={"enabled": True, "start": "23:00", "end": "07:00"})
     assert r.switch_threshold_seconds == -1
     assert r.sensitive_words == ["密码"]
+    assert r.at_trigger_mode == "any"
+    assert r.at_all_keywords == ["@all"]
+    assert r.at_extra_keywords == ["@老板"]
+    assert r.high_risk_group_keywords == ["客户"]
+    assert r.quiet_hours["enabled"] is True
     print("  update_config PASS")
+
+
+def test_at_all_mode():
+    print("=== test_at_all_mode ===")
+    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[],
+                     at_trigger_mode="all", at_all_keywords=["@所有人", "@all", "@全体"])
+    # @所有人 -> 高风险
+    res = r.assess("DingTalk", "前端群", "通知 @所有人 明天开会")
+    assert res["high_risk"] and res["hit_at"] == "@所有人", res
+    # 大小写
+    res = r.assess("DingTalk", "前端群", "hey @ALL see this")
+    assert res["high_risk"], res
+    # 普通 @某人 不弹 (mode=all)
+    res = r.assess("DingTalk", "前端群", "@张三 在吗")
+    assert not res["high_risk"], f"mode=all 时普通@不应弹, got {res}"
+    print("  @all 模式 PASS")
+
+
+def test_at_any_mode():
+    print("=== test_at_any_mode ===")
+    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[], at_trigger_mode="any")
+    # 任何 @ 都弹
+    res = r.assess("DingTalk", "前端群", "@张三 在吗")
+    assert res["high_risk"] and res["hit_at"] == "@", res
+    print("  @any 模式 PASS")
+
+
+def test_at_off_mode():
+    print("=== test_at_off_mode ===")
+    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[], at_trigger_mode="off")
+    res = r.assess("DingTalk", "前端群", "@所有人 注意")
+    assert not res["high_risk"], f"off 模式不应弹, got {res}"
+    print("  @off 模式 PASS")
+
+
+def test_at_extra_keywords():
+    print("=== test_at_extra_keywords ===")
+    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[],
+                     at_trigger_mode="all", at_all_keywords=["@所有人"],
+                     at_extra_keywords=["@老板", "@王总"])
+    # 用户自定义@词生效
+    res = r.assess("DingTalk", "前端群", "@老板 这个方案您看下")
+    assert res["high_risk"] and res["hit_at"] == "@老板", res
+    # 不在列表的普通@不弹
+    res = r.assess("DingTalk", "前端群", "@小李 好的")
+    assert not res["high_risk"], res
+    print("  @自定义词 PASS")
+
+
+def test_high_risk_group():
+    print("=== test_high_risk_group ===")
+    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[],
+                     high_risk_group_keywords=["客户", "外部", "全员", "external"])
+    # 群名命中 -> 高风险, 即使对象未变
+    r.update_last_target("DingTalk", "客户A群")
+    res = r.assess("DingTalk", "客户A群", "你好")
+    assert res["high_risk"] and res["hit_group_kw"] == "客户", res
+    # 大小写 (英文词)
+    res = r.assess("DingTalk", "External Partner", "hi")
+    assert res["high_risk"] and res["hit_group_kw"].lower() == "external", res
+    # 未命中 -> 低风险
+    res = r.assess("DingTalk", "内部技术群", "你好")
+    assert not res["high_risk"], res
+    print("  高危群 PASS")
+
+
+def test_quiet_hours_same_day():
+    print("=== test_quiet_hours_same_day ===")
+    # 同天时段 09:00~18:00: 用 datetime.now() 检测, 这里只验证逻辑结构
+    # 直接测 _in_quiet_hours 用 monkeypatch 当前时间不可行(它用 datetime.now),
+    # 改为构造一个已知落在窗口内/外的 quiet_hours 验证跨午夜分支
+    from datetime import datetime
+    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[],
+                     quiet_hours={"enabled": False, "start": "00:00", "end": "23:59"})
+    # 关闭 -> 永不触发
+    assert r._in_quiet_hours() is False
+    # 开启且全天生效
+    r.update_config(quiet_hours={"enabled": True, "start": "00:00", "end": "23:59"})
+    assert r._in_quiet_hours() is True
+    print("  静默时段同天 PASS")
+
+
+def test_quiet_hours_cross_midnight():
+    print("=== test_quiet_hours_cross_midnight ===")
+    from risk import RiskAssessor
+    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[],
+                     quiet_hours={"enabled": True, "start": "22:00", "end": "08:00"})
+    # 用 monkeypatch datetime 验证跨午夜
+    import risk as rmod
+    orig = rmod.datetime
+    class FakeDT:
+        @staticmethod
+        def now():
+            return orig.strptime("2026-08-27 23:30:00", "%Y-%m-%d %H:%M:%S")
+    rmod.datetime = FakeDT
+    try:
+        assert r._in_quiet_hours() is True, "23:30 应在 22:00~08:00 内"
+    finally:
+        rmod.datetime = orig
+
+    class FakeDT2:
+        @staticmethod
+        def now():
+            return orig.strptime("2026-08-27 03:00:00", "%Y-%m-%d %H:%M:%S")
+    rmod.datetime = FakeDT2
+    try:
+        assert r._in_quiet_hours() is True, "03:00 应在 22:00~08:00 内(跨午夜)"
+    finally:
+        rmod.datetime = orig
+
+    class FakeDT3:
+        @staticmethod
+        def now():
+            return orig.strptime("2026-08-27 12:00:00", "%Y-%m-%d %H:%M:%S")
+    rmod.datetime = FakeDT3
+    try:
+        assert r._in_quiet_hours() is False, "12:00 不应在 22:00~08:00 内"
+    finally:
+        rmod.datetime = orig
+    print("  静默时段跨午夜 PASS")
+
+
+def test_combined_high_risk():
+    print("=== test_combined_high_risk ===")
+    # 多个原因同时命中
+    r = RiskAssessor(switch_threshold_seconds=0, sensitive_words=["工资"],
+                     at_trigger_mode="all", at_all_keywords=["@所有人"],
+                     high_risk_group_keywords=["客户"],
+                     quiet_hours={"enabled": True, "start": "00:00", "end": "23:59"})
+    r.update_last_target("DingTalk", "技术群")
+    res = r.assess("DingTalk", "客户群", "@所有人 本月工资已发")
+    assert res["high_risk"]
+    reasons = "; ".join(res["reasons"])
+    assert "聊天对象" in reasons
+    assert "工资" in reasons
+    assert "@所有人" in reasons
+    assert "客户" in reasons
+    assert "非工作时间" in reasons
+    print(f"  多原因组合 PASS ({len(res['reasons'])} 个)")
 
 
 if __name__ == "__main__":
@@ -141,4 +287,12 @@ if __name__ == "__main__":
     test_last_target_updated_on_intercept()
     test_wechat_app_level_only()
     test_update_config()
+    test_at_all_mode()
+    test_at_any_mode()
+    test_at_off_mode()
+    test_at_extra_keywords()
+    test_high_risk_group()
+    test_quiet_hours_same_day()
+    test_quiet_hours_cross_midnight()
+    test_combined_high_risk()
     print("\n=== ALL RISK TESTS PASSED ===")

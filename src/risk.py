@@ -1,32 +1,58 @@
 """
 risk.py - 第二阶段风险检测
-两类检测, 任一命中即为高风险 -> 触发二次确认弹窗:
+五类检测, 任一命中即为高风险 -> 触发二次确认弹窗:
   1. 聊天对象变化: 距上次发送 <= switch_threshold_seconds 且 (app_key 或 group_name) 变化
      - 微信 PC 标题恒为 "微信", 群切换检测不到, 只能检测 app 级切换 (已知限制, 接受)
      - switch_threshold_seconds = 0  -> 任何变化都弹 (默认, 严格)
      - switch_threshold_seconds < 0  -> 关闭该检测
   2. 敏感词: 消息内容命中 sensitive_words (大小写不敏感, 子串匹配)
+  3. @提及: at_trigger_mode = "all"(仅@所有人/@all) | "any"(任何@) | "off"(关闭)
+     - at_all_keywords: 视为"@所有人"的关键词 (默认 @所有人/@all/@全体)
+     - at_extra_keywords: 用户自定义的@触发词 (如 @老板), mode=all 时也生效
+  4. 高危群: 群名命中 high_risk_group_keywords 则每次必弹 (不受对象变化逻辑管)
+  5. 静默时段: quiet_hours.enabled 且当前时间在 [start, end) 内 (支持跨午夜, 如 22:00~08:00)
 
-首次发送无基准 -> 低风险放行 (但若命中敏感词仍弹).
+首次发送无基准 -> 低风险放行 (但若命中 2/3/4/5 仍弹).
 last_target 在拦截时更新 (不论最终确认/取消), 以"尝试发送的对象"为准.
 """
 import time
+from datetime import datetime
 from typing import Optional
 
 
 class RiskAssessor:
-    def __init__(self, switch_threshold_seconds: int = 0, sensitive_words=None):
+    def __init__(self, switch_threshold_seconds: int = 0, sensitive_words=None,
+                 at_trigger_mode: str = "all", at_all_keywords=None, at_extra_keywords=None,
+                 high_risk_group_keywords=None, quiet_hours=None):
         self.switch_threshold_seconds = switch_threshold_seconds
         self.sensitive_words = [w for w in (sensitive_words or []) if w]
+        self.at_trigger_mode = at_trigger_mode
+        self.at_all_keywords = [w for w in (at_all_keywords or []) if w]
+        self.at_extra_keywords = [w for w in (at_extra_keywords or []) if w]
+        self.high_risk_group_keywords = [w for w in (high_risk_group_keywords or []) if w]
+        self.quiet_hours = quiet_hours or {"enabled": False, "start": "22:00", "end": "08:00"}
         # last_target: {"app_key": str, "group_name": str, "ts": float}
         self.last_target = None
 
-    def update_config(self, switch_threshold_seconds=None, sensitive_words=None):
+    def update_config(self, switch_threshold_seconds=None, sensitive_words=None,
+                      at_trigger_mode=None, at_all_keywords=None, at_extra_keywords=None,
+                      high_risk_group_keywords=None, quiet_hours=None):
         if switch_threshold_seconds is not None:
             self.switch_threshold_seconds = switch_threshold_seconds
         if sensitive_words is not None:
             self.sensitive_words = [w for w in sensitive_words if w]
+        if at_trigger_mode is not None:
+            self.at_trigger_mode = at_trigger_mode
+        if at_all_keywords is not None:
+            self.at_all_keywords = [w for w in at_all_keywords if w]
+        if at_extra_keywords is not None:
+            self.at_extra_keywords = [w for w in at_extra_keywords if w]
+        if high_risk_group_keywords is not None:
+            self.high_risk_group_keywords = [w for w in high_risk_group_keywords if w]
+        if quiet_hours is not None:
+            self.quiet_hours = quiet_hours
 
+    # --- 检测 1: 聊天对象变化 ---
     def _target_changed(self, app_key: str, group_name: str) -> bool:
         """比对当前目标与上次目标 (app_key + group_name 任一变化即视为变化)"""
         if not self.last_target:
@@ -52,6 +78,7 @@ class RiskAssessor:
             return True
         return elapsed <= self.switch_threshold_seconds
 
+    # --- 检测 2: 敏感词 ---
     def _hit_sensitive(self, preview: str) -> Optional[str]:
         """命中敏感词返回该词, 否则 None. 大小写不敏感, 子串匹配."""
         if not preview or not self.sensitive_words:
@@ -63,15 +90,70 @@ class RiskAssessor:
                 return w
         return None
 
+    # --- 检测 3: @提及 ---
+    def _hit_at(self, preview: str) -> Optional[str]:
+        """命中@触发词返回该词, 否则 None. 大小写不敏感, 子串匹配."""
+        if self.at_trigger_mode == "off" or not preview:
+            return None
+        preview_low = preview.lower()
+        if self.at_trigger_mode == "any":
+            # 任何 @ 都触发
+            if "@" in preview_low:
+                return "@"
+            return None
+        # mode == "all": 仅@所有人/@all 关键词 + 用户自定义额外词
+        for w in self.at_all_keywords + self.at_extra_keywords:
+            wl = w.lower()
+            if wl and wl in preview_low:
+                return w
+        return None
+
+    # --- 检测 4: 高危群 ---
+    def _hit_high_risk_group(self, group_name: str) -> Optional[str]:
+        """群名命中高危关键词返回该词, 否则 None. 大小写不敏感, 子串匹配."""
+        if not group_name or not self.high_risk_group_keywords:
+            return None
+        g_low = group_name.lower()
+        for w in self.high_risk_group_keywords:
+            wl = w.lower()
+            if wl and wl in g_low:
+                return w
+        return None
+
+    # --- 检测 5: 静默时段 ---
+    def _in_quiet_hours(self) -> bool:
+        """当前本地时间是否在静默时段内. 支持跨午夜 (start > end, 如 22:00~08:00)."""
+        qh = self.quiet_hours or {}
+        if not qh.get("enabled"):
+            return False
+        start = qh.get("start")
+        end = qh.get("end")
+        if not start or not end:
+            return False
+        try:
+            now = datetime.now().strftime("%H:%M")
+            if start <= end:
+                # 同一天, 如 09:00~18:00
+                return start <= now < end
+            else:
+                # 跨午夜, 如 22:00~08:00 -> now >= 22:00 或 now < 08:00
+                return now >= start or now < end
+        except Exception:
+            return False
+
     def assess(self, app_key: str, group_name: str, preview: str):
         """
         评估风险. 返回 dict:
           { "high_risk": bool,
             "reasons": [str, ...],   # 命中的原因 (供日志/弹窗展示)
-            "hit_word": str|None }   # 命中的敏感词
+            "hit_word": str|None,    # 命中的敏感词
+            "hit_at": str|None,      # 命中的@触发词
+            "hit_group_kw": str|None } # 命中的高危群关键词
         """
         reasons = []
         hit_word = None
+        hit_at = None
+        hit_group_kw = None
 
         # 1. 聊天对象变化
         if self._within_threshold() and self._target_changed(app_key, group_name):
@@ -82,10 +164,30 @@ class RiskAssessor:
         if hit_word:
             reasons.append(f"消息含敏感词: {hit_word}")
 
+        # 3. @提及
+        hit_at = self._hit_at(preview)
+        if hit_at:
+            if hit_at == "@":
+                reasons.append("消息含@提及")
+            else:
+                reasons.append(f"消息含@触发词: {hit_at}")
+
+        # 4. 高危群 (不受对象变化逻辑管, 每次必弹)
+        hit_group_kw = self._hit_high_risk_group(group_name)
+        if hit_group_kw:
+            reasons.append(f"高危群: 命中关键词 '{hit_group_kw}'")
+
+        # 5. 静默时段
+        if self._in_quiet_hours():
+            qh = self.quiet_hours
+            reasons.append(f"非工作时间 ({qh['start']}~{qh['end']})")
+
         return {
             "high_risk": bool(reasons),
             "reasons": reasons,
             "hit_word": hit_word,
+            "hit_at": hit_at,
+            "hit_group_kw": hit_group_kw,
         }
 
     def update_last_target(self, app_key: str, group_name: str):
