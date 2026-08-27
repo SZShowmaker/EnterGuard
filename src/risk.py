@@ -91,17 +91,23 @@ class RiskAssessor:
         return None
 
     # --- 检测 3: @提及 ---
+    # UIA 对真实 @ 提及控件 (钉钉/飞书富文本) 读不到人名, uia.py 会用 "@某人" 占位.
+    # mode=all 时, 命中占位也视为 @ 提及 (因为是 UIA 探测到的真实提及控件, 而非普通文本里的@).
+    _AT_PLACEHOLDER = "@某人"
+
     def _hit_at(self, preview: str) -> Optional[str]:
         """命中@触发词返回该词, 否则 None. 大小写不敏感, 子串匹配."""
         if self.at_trigger_mode == "off" or not preview:
             return None
         preview_low = preview.lower()
         if self.at_trigger_mode == "any":
-            # 任何 @ 都触发
+            # 任何 @ 都触发 (含 @某人 占位)
             if "@" in preview_low:
                 return "@"
             return None
-        # mode == "all": 仅@所有人/@all 关键词 + 用户自定义额外词
+        # mode == "all": 仅@所有人/@all 关键词 + 用户自定义额外词 + @某人 占位
+        if self._AT_PLACEHOLDER in preview_low:
+            return self._AT_PLACEHOLDER
         for w in self.at_all_keywords + self.at_extra_keywords:
             wl = w.lower()
             if wl and wl in preview_low:
@@ -169,6 +175,8 @@ class RiskAssessor:
         if hit_at:
             if hit_at == "@":
                 reasons.append("消息含@提及")
+            elif hit_at == self._AT_PLACEHOLDER:
+                reasons.append("消息含真实@提及 (UIA探测到提及控件)")
             else:
                 reasons.append(f"消息含@触发词: {hit_at}")
 

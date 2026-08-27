@@ -54,6 +54,10 @@ def get_input_preview(max_len=120) -> str:
     """
     尝试通过 UI Automation 读取当前焦点输入框的内容
     成功返回文本, 失败返回 "" (不抛异常)
+
+    钉钉/飞书的 @ 提及是富文本控件, Value 里读不到人名 (如 Name="虚线框OBJ").
+    方案: 遍历输入框子控件, 拼接各片段文本; 对 @ 提及控件统一标记 "@某人" 占位,
+    便于上层 risk 做命中判断 (含 @ 即视为提及).
     """
     if not IS_WINDOWS:
         return "【Linux Mock预览】这是一条模拟的消息内容, 用于测试弹窗显示..."
@@ -62,10 +66,9 @@ def get_input_preview(max_len=120) -> str:
     try:
         import uiautomation as auto
 
-        # 获取焦点控件
         focused = auto.GetFocusedControl()
         if focused:
-            # 尝试 ValuePattern
+            # 先尝试焦点控件自身的 ValuePattern (普通文本输入框命中这里)
             try:
                 val = focused.GetValuePattern()
                 if val:
@@ -74,10 +77,18 @@ def get_input_preview(max_len=120) -> str:
                         return text[:max_len]
             except Exception:
                 pass
-            # 备用: Name 属性有时也存文本
+
+            # 焦点控件 Value 为空: 可能是富文本容器 (钉钉/飞书/微信新版输入框).
+            # 遍历子控件拼接文本, 对 @ 提及控件用 "@某人" 占位.
+            parts = _collect_text_from_subtree(focused, depth=0, max_depth=3)
+            if parts:
+                joined = "".join(parts).strip()
+                if joined:
+                    return joined[:max_len]
+
+            # 备用: Name 属性
             try:
                 name = focused.Name or ""
-                # 过滤掉按钮名等, 只有较长文本才认为是输入内容
                 if name and len(name) > 1 and name not in ["发送", "Send"]:
                     return name[:max_len]
             except Exception:
@@ -99,6 +110,56 @@ def get_input_preview(max_len=120) -> str:
 
     # 方案3: 读不到就返回空, 调用方会显示"无法读取内容"
     return ""
+
+
+# 已知 @ 提及控件的 Name/类型特征 (钉钉: 虚线框OBJ; 其他应用可补充)
+_AT_MENTION_HINTS = ("虚线框", "mention", "@", "atuser")
+
+
+def _collect_text_from_subtree(ctrl, depth=0, max_depth=3):
+    """递归遍历控件子树, 拼接文本片段. 对疑似 @ 提及的控件用 "@某人" 占位."""
+    if depth > max_depth:
+        return []
+    parts = []
+    try:
+        name = (ctrl.Name or "").strip()
+        ctype = (ctrl.ControlTypeName or "").strip()
+        # @ 提及控件特征: Name 含 "虚线框"/"mention" 等, 或是带 Name 的 Text/Button/Hyperlink
+        is_at_mention = False
+        if name:
+            name_low = name.lower()
+            for hint in _AT_MENTION_HINTS:
+                if hint in name_low:
+                    is_at_mention = True
+                    break
+        # 尝试本控件的 Value
+        local_text = ""
+        try:
+            vp = ctrl.GetValuePattern()
+            if vp:
+                local_text = (vp.Value or "").strip()
+        except Exception:
+            pass
+
+        if is_at_mention:
+            # @ 提及控件: 用占位, 让上层能识别"含 @ 提及"
+            parts.append("@某人")
+        elif local_text:
+            parts.append(local_text)
+        elif name and ctype in ("Text", "Button", "Hyperlink", "Edit", "Document"):
+            # 普通文本片段控件
+            if name not in ("发送", "Send"):
+                parts.append(name)
+
+        # 递归子控件
+        try:
+            for child in ctrl.GetChildren():
+                parts.extend(_collect_text_from_subtree(child, depth + 1, max_depth))
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return parts
 
 
 def get_foreground_info():

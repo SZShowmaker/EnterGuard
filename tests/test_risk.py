@@ -185,6 +185,26 @@ def test_at_extra_keywords():
     print("  @自定义词 PASS")
 
 
+def test_at_placeholder_for_real_mention():
+    print("=== test_at_placeholder_for_real_mention ===")
+    # 钉钉真实@提及 UIA 读不到人名, uia.py 用 "@某人" 占位.
+    # mode=all 时, 占位应命中 (因为是 UIA 探测到的真实提及控件).
+    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[],
+                     at_trigger_mode="all", at_all_keywords=["@所有人"])
+    res = r.assess("DingTalk", "前端群", "通知 @某人 明天开会")
+    assert res["high_risk"], f"真实@提及占位应命中, got {res}"
+    assert res["hit_at"] == "@某人", res
+    # mode=off 时占位也不弹
+    r2 = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[], at_trigger_mode="off")
+    res = r2.assess("DingTalk", "前端群", "@某人 注意")
+    assert not res["high_risk"], res
+    # mode=any 时占位也命中
+    r3 = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[], at_trigger_mode="any")
+    res = r3.assess("DingTalk", "前端群", "@某人 注意")
+    assert res["high_risk"] and res["hit_at"] == "@", res
+    print("  @某人占位 PASS")
+
+
 def test_high_risk_group():
     print("=== test_high_risk_group ===")
     r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[],
@@ -291,6 +311,7 @@ if __name__ == "__main__":
     test_at_any_mode()
     test_at_off_mode()
     test_at_extra_keywords()
+    test_at_placeholder_for_real_mention()
     test_high_risk_group()
     test_quiet_hours_same_day()
     test_quiet_hours_cross_midnight()
