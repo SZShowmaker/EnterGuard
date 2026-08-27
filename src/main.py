@@ -183,7 +183,7 @@ class App:
 
         ttk.Label(
             risk_frame,
-            text="首次发送默认放行(无基准); 微信PC标题恒为'微信', 只能检测app级切换(已知限制)",
+            text="首次发送默认放行(无基准); 新版钉钉用选中项索引检测群切换; 微信只能检测app级切换(已知限制)",
             font=("微软雅黑", 7),
             foreground="#9ca3af",
             wraplength=460,

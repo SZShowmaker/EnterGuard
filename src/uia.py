@@ -146,13 +146,78 @@ def _collect_text_from_subtree(ctrl, depth=0, max_depth=3):
     return parts
 
 
+def get_selected_conversation_index():
+    """
+    钉钉/飞书新版为 Qt 自绘, 会话列表项的 Name 为空, UIA 读不到群名.
+    但当前选中的会话项 IsSelected=True, 可用"选中项索引"作为会话指纹,
+    检测"切换了会话" (不需要知道群名, 只要索引变化即视为切换).
+
+    返回: 选中项索引(int), 无选中或读取失败返回 -1. 仅 Windows 有效.
+    """
+    if not IS_WINDOWS:
+        return 0
+    try:
+        import uiautomation as auto
+        import ctypes
+
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        ctrl = auto.ControlFromHandle(hwnd)
+        if not ctrl:
+            return -1
+
+        # 在控件树里找会话列表 (钉钉: ConvListItemListView; 其他应用可能不同)
+        def find_lists(c, depth=0, max_depth=8, out=None):
+            if out is None:
+                out = []
+            if depth > max_depth:
+                return out
+            try:
+                cn = c.ClassName or ""
+                if c.ControlTypeName == "ListControl" and ("ConvListItem" in cn or "ConvList" in cn):
+                    out.append(c)
+                for child in c.GetChildren():
+                    find_lists(child, depth + 1, max_depth, out)
+            except Exception:
+                pass
+            return out
+
+        for lst in find_lists(ctrl):
+            try:
+                for idx, item in enumerate(lst.GetChildren()):
+                    try:
+                        sip = item.GetSelectionItemPattern()
+                        if sip and sip.IsSelected:
+                            return idx
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[uia] get_selected_conversation_index failed: {e}")
+    return -1
+
+
 def get_foreground_info():
     """
     一站式获取: 群名 + 内容预览 + 标题 + 类名
     返回 dict: {title, class_name, group_name, preview}
+
+    群名策略 (优先级递减):
+      1. 标题切分 (老版钉钉/飞书 "群名 - 钉钉")
+      2. 选中项索引指纹 (新版钉钉 Qt 自绘读不到群名, 用 "app#索引" 作为伪群名,
+         至少能让"聊天对象变化"检测恢复群级; 弹窗显示伪群名供用户辨识)
     """
     title, cls = get_window_title_and_class()
     group = extract_group_name_from_title(title)
+    # 标题切分不出真群名 (得到 "钉钉"/"微信" 等应用名本身) -> 用选中项索引兜底
+    # 判定: 切分结果与标题相同, 说明没切出群名
+    if group == title or not group or group == "未知会话":
+        sel_idx = get_selected_conversation_index()
+        if sel_idx >= 0:
+            # 用 "应用名#索引" 作为会话指纹, 切换会话时索引变 -> 伪群名变 -> 触发对象变化检测
+            # 从标题提取应用显示名 (钉钉/微信/飞书)
+            app_name = title.strip() if title else "未知"
+            group = f"{app_name}#{sel_idx}"
     # 内容预览可能稍慢, 放在后面
     preview = get_input_preview()
     return {

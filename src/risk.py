@@ -2,7 +2,8 @@
 risk.py - 第二阶段风险检测
 四类检测, 任一命中即为高风险 -> 触发二次确认弹窗:
   1. 聊天对象变化: 距上次发送 <= switch_threshold_seconds 且 (app_key 或 group_name) 变化
-     - 微信 PC 标题恒为 "微信", 群切换检测不到, 只能检测 app 级切换 (已知限制, 接受)
+     - 会话名(group_name)来源: 老版钉钉/飞书标题切分; 新版钉钉用会话列表选中项索引指纹(如 "钉钉#0")
+     - 微信 PC 读不到会话列表选中状态, 群切换检测不到, 只能检测 app 级切换 (已知限制)
      - switch_threshold_seconds = 0  -> 任何变化都弹 (默认, 严格)
      - switch_threshold_seconds < 0  -> 关闭该检测
   2. 敏感词: 消息内容命中 sensitive_words (大小写不敏感, 子串匹配)
