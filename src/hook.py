@@ -164,10 +164,16 @@ class HookManager:
         self.running = False
         self._hook_proc_type = None
         self.dialog_open = False  # 弹窗打开期间不拦截, 让Enter能到达弹窗
+        self.dialog_hwnd = 0  # 弹窗的顶级 HWND, 用于判断前台是否已切到弹窗
         self._dialog_lock = threading.Lock()
 
     def log(self, msg):
         self.logger(msg)
+
+    def set_dialog_hwnd(self, hwnd):
+        """主线程在弹窗创建后调用, 传入弹窗 HWND; 关闭时传 0"""
+        with self._dialog_lock:
+            self.dialog_hwnd = hwnd or 0
 
     def _is_modifier_pressed(self):
         """检查 Shift/Ctrl/Alt 是否按下, 按下则说明不是单纯的 Enter 发送"""
@@ -212,11 +218,23 @@ class HookManager:
             self.dialog_open = open_
 
     def _low_level_proc(self, nCode, wParam, lParam):
-        # 弹窗打开时直接放行, 让Enter能到达确认框
+        # 弹窗打开期间: 让弹窗接收按键, 但防止焦点未切到弹窗时 Enter 误入原应用
         with self._dialog_lock:
             if self.dialog_open:
-                # 放行给弹窗
                 if IS_WINDOWS:
+                    # 对 Enter 额外检查: 只有前台 == 弹窗 HWND 才放行
+                    # 否则焦点还在微信/钉钉时放行 Enter 会导致消息误发 (UIA读取+建窗的竞态窗口)
+                    if nCode == 0 and wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                        try:
+                            kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                            is_injected = (kb.flags & 0x10) != 0  # LLKHF_INJECTED
+                            if kb.vkCode == VK_RETURN and not is_injected:
+                                fg = user32.GetForegroundWindow()
+                                if fg != self.dialog_hwnd:
+                                    # 焦点还在原应用, 吞掉 Enter 避免误发
+                                    return 1
+                        except Exception:
+                            pass
                     return user32.CallNextHookEx(self.hook_handle, nCode, wParam, lParam)
                 return 0
         # 必须尽快返回, 否则会卡所有键盘输入

@@ -7,10 +7,12 @@ import sys
 IS_WINDOWS = sys.platform == "win32"
 
 
-def show_confirm_dialog(parent, app_key: str, app_display: str, group_name: str, preview: str, title: str, class_name: str, test_mode: bool) -> bool:
+def show_confirm_dialog(parent, app_key: str, app_display: str, group_name: str, preview: str, title: str, class_name: str, test_mode: bool, reasons=None, hwnd_setter=None) -> bool:
     """
     弹出确认框, 返回 True=用户点发送, False=取消
     parent: tkinter root 或 None
+    reasons: 风险原因列表 (第二阶段), 展示在标题下方, 如 ["检测到聊天对象发生变化", "消息含敏感词: 工资"]
+    hwnd_setter: 可选回调 fn(hwnd), 弹窗创建后传入其顶级 HWND, 供钩子判断前台是否切到弹窗
     """
     # 非Windows或无tk环境降级为控制台确认 (供Linux开发测试)
     try:
@@ -54,6 +56,16 @@ def show_confirm_dialog(parent, app_key: str, app_display: str, group_name: str,
     # 标题行 - 带图标
     header = ttk.Label(main, text="⚠️  确定要发送这条消息吗？", font=("微软雅黑", 12, "bold"), foreground="#d97706")
     header.pack(anchor="w", pady=(0, 12))
+
+    # 风险原因 (第二阶段) - 红色高亮展示
+    if reasons:
+        reason_frame = ttk.Frame(main, relief="solid", borderwidth=1)
+        reason_frame.pack(fill="x", pady=(0, 10))
+        ttk.Label(reason_frame, text="⚠️ 触发原因:", font=("微软雅黑", 9, "bold"), foreground="#dc2626").pack(anchor="w", padx=8, pady=(6, 2))
+        for r in reasons:
+            ttk.Label(reason_frame, text=f"• {r}", font=("微软雅黑", 9), foreground="#dc2626").pack(anchor="w", padx=16, pady=1)
+        # 留点底部空白
+        ttk.Frame(reason_frame, height=4).pack()
 
     # 应用和群名
     info_frame = ttk.Frame(main)
@@ -99,6 +111,11 @@ def show_confirm_dialog(parent, app_key: str, app_display: str, group_name: str,
 
     def on_confirm(event=None):
         result["confirmed"] = True
+        if hwnd_setter:
+            try:
+                hwnd_setter(0)
+            except Exception:
+                pass
         try:
             dialog.grab_release()
         except:
@@ -111,6 +128,11 @@ def show_confirm_dialog(parent, app_key: str, app_display: str, group_name: str,
 
     def on_cancel(event=None):
         result["confirmed"] = False
+        if hwnd_setter:
+            try:
+                hwnd_setter(0)
+            except Exception:
+                pass
         try:
             dialog.grab_release()
         except:
@@ -181,6 +203,12 @@ def show_confirm_dialog(parent, app_key: str, app_display: str, group_name: str,
             hwnd = dialog.winfo_id()
             # winfo_id 对 Toplevel 一般即顶级 HWND, 用 GetAncestor(GA_ROOT) 兜底取根窗口
             top_hwnd = _u.GetAncestor(hwnd, 2) or hwnd  # GA_ROOT = 2
+            # 通知钩子弹窗的 HWND, 使其在 dialog_open 期间判断 Enter 该不该放行
+            if hwnd_setter:
+                try:
+                    hwnd_setter(top_hwnd)
+                except Exception:
+                    pass
             fg = _u.GetForegroundWindow()
             my_tid = _k.GetCurrentThreadId()
             fg_tid = 0

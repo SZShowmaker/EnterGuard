@@ -29,11 +29,29 @@ DEFAULT_APPS = {
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.json")
 
+# 默认敏感词表 (高危/隐私 + 常见脏话), 用户可在 config.json 或 GUI 中增删
+# 匹配为子串包含 (大小写不敏感), 词越短误伤越大, 故最短取2字
+DEFAULT_SENSITIVE_WORDS = [
+    # 隐私/财务
+    "工资", "薪水", "薪酬", "收入",
+    "密码", "口令", "验证码", "动态码",
+    "身份证", "身份证号", "护照",
+    "银行卡", "卡号", "账号", "账户",
+    "转账", "汇款", "打款", "收款",
+    # 常见脏话 (保守收录, 用户可自行扩充)
+    "傻逼", "草泥马", "fuck", "shit", "bitch",
+]
+
 
 class AppConfig:
     def __init__(self):
         self.master_enabled = True  # 总开关
         self.test_mode = True  # 测试模式: 开启时拦截后不重放Enter, 绝不真发送 (默认开启, 安全)
+        # 风险检测配置 (第二阶段)
+        # 切换阈值(秒): 距上次发送 <= 该值且聊天对象变化 -> 高风险. 0 = 任何变化都弹, 负数 = 关闭该检测
+        self.switch_threshold_seconds = 0
+        # 敏感词表: 命中任一即高风险 (大小写不敏感, 子串匹配)
+        self.sensitive_words = list(DEFAULT_SENSITIVE_WORDS)
         self.apps = json.loads(json.dumps(DEFAULT_APPS))  # deep copy
         self.load()
 
@@ -44,6 +62,10 @@ class AppConfig:
                     data = json.load(f)
                 self.master_enabled = data.get("master_enabled", self.master_enabled)
                 self.test_mode = data.get("test_mode", self.test_mode)
+                self.switch_threshold_seconds = data.get("switch_threshold_seconds", self.switch_threshold_seconds)
+                # 敏感词: 优先用用户配置, 否则保留默认
+                if "sensitive_words" in data:
+                    self.sensitive_words = list(data["sensitive_words"])
                 # 合并 apps, 保留新增的默认值
                 loaded_apps = data.get("apps", {})
                 for k, v in loaded_apps.items():
@@ -61,6 +83,8 @@ class AppConfig:
                     {
                         "master_enabled": self.master_enabled,
                         "test_mode": self.test_mode,
+                        "switch_threshold_seconds": self.switch_threshold_seconds,
+                        "sensitive_words": self.sensitive_words,
                         "apps": self.apps,
                     },
                     f,

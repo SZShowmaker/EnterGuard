@@ -24,11 +24,13 @@ try:
     from hook import HookManager
     from uia import get_foreground_info
     from dialog import show_confirm_dialog
+    from risk import RiskAssessor
 except ImportError:
     from .config import AppConfig
     from .hook import HookManager
     from .uia import get_foreground_info
     from .dialog import show_confirm_dialog
+    from .risk import RiskAssessor
 
 
 class App:
@@ -38,6 +40,11 @@ class App:
         self.event_queue = queue.Queue(maxsize=32)
         self.hook = HookManager(self.config, self.event_queue, logger=self.log)
         self._dialog_open = False
+        # 风险检测器 (第二阶段): 低风险静默放行, 高风险才弹窗
+        self.risk = RiskAssessor(
+            switch_threshold_seconds=self.config.switch_threshold_seconds,
+            sensitive_words=self.config.sensitive_words,
+        )
 
         self.root.title("消息发送二次确认 - DingDing Guard")
         # 自适应: 先设较大默认, 之后按内容自动调整
@@ -108,6 +115,44 @@ class App:
         )
         test_cb.pack(anchor="w")
         ttk.Label(master_frame, text="建议: 先开启测试模式验证弹窗, 确认无误后再关闭", font=("微软雅黑", 7), foreground="#059669").pack(anchor="w", padx=(22, 0))
+
+        # --- 第二阶段: 风险检测配置 ---
+        risk_frame = ttk.LabelFrame(self.root, text=" 风险检测 (高风险才弹窗, 低风险静默放行) ", padding=12)
+        risk_frame.pack(fill="x", padx=16, pady=(0, 8))
+
+        row1 = ttk.Frame(risk_frame)
+        row1.pack(fill="x", pady=(0, 6))
+        ttk.Label(row1, text="切换阈值(秒):", font=("微软雅黑", 8)).pack(side="left")
+        self.threshold_var = tk.StringVar(value=str(self.config.switch_threshold_seconds))
+        ttk.Entry(row1, textvariable=self.threshold_var, width=6, font=("微软雅黑", 8)).pack(side="left", padx=(4, 8))
+        ttk.Button(row1, text="保存", width=6, command=self.save_threshold).pack(side="left")
+        ttk.Label(
+            row1,
+            text="0=任何变化都弹  负数=关闭对象变化检测  正数=N秒内切换才弹",
+            font=("微软雅黑", 7),
+            foreground="#6b7280",
+        ).pack(side="left", padx=(8, 0))
+
+        row2 = ttk.Frame(risk_frame)
+        row2.pack(fill="x")
+        ttk.Label(row2, text="敏感词:", font=("微软雅黑", 8)).pack(side="left")
+        self.words_count_var = tk.StringVar(value=f"当前 {len(self.config.sensitive_words)} 个")
+        ttk.Label(row2, textvariable=self.words_count_var, font=("微软雅黑", 8), foreground="#2563eb").pack(side="left", padx=(4, 8))
+        ttk.Button(row2, text="编辑敏感词", command=self.edit_sensitive_words).pack(side="left")
+        ttk.Label(
+            row2,
+            text="消息含敏感词时必弹 (大小写不敏感, 子串匹配)",
+            font=("微软雅黑", 7),
+            foreground="#6b7280",
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Label(
+            risk_frame,
+            text="首次发送默认放行(无基准); 微信PC标题恒为'微信', 只能检测app级切换(已知限制)",
+            font=("微软雅黑", 7),
+            foreground="#9ca3af",
+            wraplength=460,
+        ).pack(anchor="w", pady=(6, 0))
 
         # 应用开关区 (可扩展)
         app_frame = ttk.LabelFrame(self.root, text=" 监控应用 (可多选, 后续可扩展) ", padding=12)
@@ -231,6 +276,65 @@ class App:
         self.update_status()
         self.log(f"应用 {key} -> {'监控' if val else '忽略'}")
 
+    def save_threshold(self):
+        raw = self.threshold_var.get().strip()
+        try:
+            val = int(raw)
+        except ValueError:
+            messagebox.showwarning("提示", f"请输入整数, 当前输入: {raw!r}", parent=self.root)
+            self.threshold_var.set(str(self.config.switch_threshold_seconds))
+            return
+        self.config.switch_threshold_seconds = val
+        self.config.save()
+        self.risk.update_config(switch_threshold_seconds=val)
+        desc = "任何变化都弹" if val == 0 else ("关闭对象变化检测" if val < 0 else f"{val}秒内切换才弹")
+        self.log(f"切换阈值 -> {val} ({desc})")
+
+    def edit_sensitive_words(self):
+        """弹出敏感词编辑窗口, 每行一个词"""
+        win = tk.Toplevel(self.root)
+        win.title("编辑敏感词 (每行一个)")
+        win.attributes("-topmost", True)
+        win.geometry("520x480")
+        win.minsize(440, 380)
+        win.resizable(True, True)
+        try:
+            win.grab_set()
+        except:
+            pass
+
+        ttk.Label(win, text="每行一个词, 大小写不敏感, 子串匹配. 空行自动忽略", font=("微软雅黑", 8), foreground="#6b7280").pack(anchor="w", padx=10, pady=(8, 4))
+
+        result = {"saved": False}
+
+        def on_save():
+            raw = txt.get("1.0", "end").splitlines()
+            words = [w.strip() for w in raw if w.strip()]
+            self.config.sensitive_words = words
+            self.config.save()
+            self.risk.update_config(sensitive_words=words)
+            self.words_count_var.set(f"当前 {len(words)} 个")
+            self.log(f"敏感词已更新 -> {len(words)} 个")
+            result["saved"] = True
+            win.destroy()
+
+        def on_cancel():
+            win.destroy()
+
+        # 关键: 先 pack 底部按钮区 (side=bottom), 再 pack 可扩展的 Text.
+        # 否则 Text 的 expand=True 会先占满整个空间, 后 pack 的按钮区被挤到可视区外.
+        btns = ttk.Frame(win)
+        btns.pack(fill="x", side="bottom", padx=10, pady=(4, 10))
+        ttk.Button(btns, text="保存", command=on_save).pack(side="right", padx=(4, 0))
+        ttk.Button(btns, text="取消", command=on_cancel).pack(side="right")
+
+        txt = tk.Text(win, wrap="word", font=("微软雅黑", 9))
+        txt.pack(fill="both", expand=True, padx=10, pady=(0, 4))
+        for w in self.config.sensitive_words:
+            txt.insert("end", w + "\n")
+
+        self.root.wait_window(win)
+
     def clear_log(self):
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
@@ -335,12 +439,34 @@ class App:
 
             group_name = extract_group_name_from_title(real_title)
 
-        self.log(f"[intercept] 准备弹窗 | {app_display} | 群:{group_name} | 预览:{preview[:30] if preview else '(空)'}")
+        # --- 第二阶段: 风险检测 ---
+        # 拦截时立即更新 last_target (不论后续确认/取消), 以"尝试发送的对象"为准
+        risk = self.risk.assess(app_key, group_name, preview)
+        is_first = self.risk.last_target is None
+        self.risk.update_last_target(app_key, group_name)
+
+        evt_hwnd = evt.get("hwnd", 0)
+
+        if not risk["high_risk"]:
+            # 低风险: 静默放行, 不弹窗
+            tag = "首次发送" if is_first else "对象未变且无敏感词"
+            self.log(f"[intercept] 低风险放行 ({tag}) | {app_display} | 群:{group_name} | 预览:{preview[:30] if preview else '(空)'}")
+            self._dialog_open = False
+            self.hook.set_dialog_open(False)
+            # 焦点切回原应用后重放 Enter
+            self._restore_focus_and_replay(evt_hwnd, app_key, group_name)
+            return
+
+        # 高风险: 弹窗
+        reason_str = "; ".join(risk["reasons"])
+        self.log(f"[intercept] ⚠️ 高风险 -> 弹窗 | {app_display} | 群:{group_name} | 原因:{reason_str} | 预览:{preview[:30] if preview else '(空)'}")
 
         # 弹窗 (模态, 阻塞)
         try:
             confirmed = show_confirm_dialog(
-                self.root, app_key, app_display, group_name, preview, real_title, real_cls, self.config.test_mode
+                self.root, app_key, app_display, group_name, preview, real_title, real_cls, self.config.test_mode,
+                reasons=risk["reasons"],
+                hwnd_setter=self.hook.set_dialog_hwnd,
             )
         except Exception as e:
             self.log(f"[dialog] error: {e}")
@@ -348,6 +474,7 @@ class App:
         finally:
             self._dialog_open = False
             self.hook.set_dialog_open(False)
+            self.hook.set_dialog_hwnd(0)
             # 清空弹窗期间堆积的重复 Enter, 避免关闭后立即又弹
             try:
                 cleared = 0
@@ -364,7 +491,6 @@ class App:
 
         # 焦点切回原应用窗口 (弹窗是 Toplevel(root), 关闭后焦点默认回到 Guard, 必须显式切回)
         # 否则确认后 SendInput 的 Enter 会发给 Guard 自己, 取消后用户也无法继续编辑原消息
-        evt_hwnd = evt.get("hwnd", 0)
         if IS_WINDOWS and evt_hwnd:
             try:
                 import ctypes
@@ -378,6 +504,17 @@ class App:
             self.hook.replay_enter(app_key, target_hwnd=evt_hwnd)
         else:
             self.log(f"[user] 取消发送 -> {group_name}")
+
+    def _restore_focus_and_replay(self, evt_hwnd, app_key, group_name):
+        """低风险放行: 焦点切回原应用后重放 Enter (复用 replay_enter 的安全路径)"""
+        if IS_WINDOWS and evt_hwnd:
+            try:
+                import ctypes
+                ctypes.windll.user32.SetForegroundWindow(evt_hwnd)
+                ctypes.windll.user32.SetFocus(evt_hwnd)
+            except Exception as e:
+                self.log(f"[intercept] 恢复焦点失败: {e}")
+        self.hook.replay_enter(app_key, target_hwnd=evt_hwnd)
 
     def on_close(self):
         if messagebox.askokcancel("退出", "确定退出 DingDing Guard?\n退出后将不再拦截。", parent=self.root):
