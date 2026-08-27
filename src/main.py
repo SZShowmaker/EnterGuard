@@ -44,9 +44,6 @@ class App:
         self.risk = RiskAssessor(
             switch_threshold_seconds=self.config.switch_threshold_seconds,
             sensitive_words=self.config.sensitive_words,
-            at_trigger_mode=self.config.at_trigger_mode,
-            at_all_keywords=self.config.at_all_keywords,
-            at_extra_keywords=self.config.at_extra_keywords,
             high_risk_group_keywords=self.config.high_risk_group_keywords,
             quiet_hours=self.config.quiet_hours,
         )
@@ -147,23 +144,6 @@ class App:
         ttk.Label(
             row2,
             text="消息含敏感词时必弹 (大小写不敏感, 子串匹配)",
-            font=("微软雅黑", 7),
-            foreground="#6b7280",
-        ).pack(side="left", padx=(8, 0))
-
-        # @提及检测
-        row3 = ttk.Frame(risk_frame)
-        row3.pack(fill="x", pady=(6, 0))
-        ttk.Label(row3, text="@检测:", font=("微软雅黑", 8)).pack(side="left")
-        self.at_mode_var = tk.StringVar(value=self.config.at_trigger_mode)
-        at_combo = ttk.Combobox(row3, textvariable=self.at_mode_var, width=8, state="readonly",
-                                values=["all", "any", "off"], font=("微软雅黑", 8))
-        at_combo.pack(side="left", padx=(4, 8))
-        at_combo.bind("<<ComboboxSelected>>", lambda e: self.save_at_mode())
-        ttk.Button(row3, text="编辑@词", command=self.edit_at_keywords).pack(side="left")
-        ttk.Label(
-            row3,
-            text="all=仅@所有人弹  any=任何@都弹  off=关闭; @词含@所有人/@all/@全体+自定义",
             font=("微软雅黑", 7),
             foreground="#6b7280",
         ).pack(side="left", padx=(8, 0))
@@ -361,22 +341,6 @@ class App:
             on_save=on_save,
         )
 
-    def edit_at_keywords(self):
-        """编辑@触发词: 上半区@所有人关键词(只读说明), 下半区用户自定义@词"""
-        def on_save(words):
-            self.config.at_extra_keywords = words
-            self.config.save()
-            self.risk.update_config(at_extra_keywords=words)
-            self.log(f"@自定义词已更新 -> {len(words)} 个 (mode=all 时生效)")
-
-        self._edit_word_list(
-            title="编辑自定义@触发词 (每行一个)",
-            hint=f"mode=all 时, 除内置 [{', '.join(self.config.at_all_keywords)}] 外, 还匹配这里的词\n"
-                 f"如填 @老板/@张三; mode=any 时任何@都弹, 此列表不生效; 每行一个, 空行忽略",
-            initial=list(self.config.at_extra_keywords),
-            on_save=on_save,
-        )
-
     def edit_high_risk_groups(self):
         """编辑高危群关键词"""
         def on_save(words):
@@ -432,14 +396,6 @@ class App:
             txt.insert("end", w + "\n")
 
         self.root.wait_window(win)
-
-    def save_at_mode(self):
-        val = self.at_mode_var.get()
-        self.config.at_trigger_mode = val
-        self.config.save()
-        self.risk.update_config(at_trigger_mode=val)
-        desc = {"all": "仅@所有人弹", "any": "任何@都弹", "off": "关闭@检测"}[val]
-        self.log(f"@检测模式 -> {val} ({desc})")
 
     def save_quiet_hours(self):
         enabled = bool(self.quiet_enabled_var.get())

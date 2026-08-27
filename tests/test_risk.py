@@ -126,83 +126,12 @@ def test_update_config():
     print("=== test_update_config ===")
     r = RiskAssessor(switch_threshold_seconds=0, sensitive_words=["工资"])
     r.update_config(switch_threshold_seconds=-1, sensitive_words=["密码"],
-                    at_trigger_mode="any", at_all_keywords=["@all"], at_extra_keywords=["@老板"],
                     high_risk_group_keywords=["客户"], quiet_hours={"enabled": True, "start": "23:00", "end": "07:00"})
     assert r.switch_threshold_seconds == -1
     assert r.sensitive_words == ["密码"]
-    assert r.at_trigger_mode == "any"
-    assert r.at_all_keywords == ["@all"]
-    assert r.at_extra_keywords == ["@老板"]
     assert r.high_risk_group_keywords == ["客户"]
     assert r.quiet_hours["enabled"] is True
     print("  update_config PASS")
-
-
-def test_at_all_mode():
-    print("=== test_at_all_mode ===")
-    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[],
-                     at_trigger_mode="all", at_all_keywords=["@所有人", "@all", "@全体"])
-    # @所有人 -> 高风险
-    res = r.assess("DingTalk", "前端群", "通知 @所有人 明天开会")
-    assert res["high_risk"] and res["hit_at"] == "@所有人", res
-    # 大小写
-    res = r.assess("DingTalk", "前端群", "hey @ALL see this")
-    assert res["high_risk"], res
-    # 普通 @某人 不弹 (mode=all)
-    res = r.assess("DingTalk", "前端群", "@张三 在吗")
-    assert not res["high_risk"], f"mode=all 时普通@不应弹, got {res}"
-    print("  @all 模式 PASS")
-
-
-def test_at_any_mode():
-    print("=== test_at_any_mode ===")
-    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[], at_trigger_mode="any")
-    # 任何 @ 都弹
-    res = r.assess("DingTalk", "前端群", "@张三 在吗")
-    assert res["high_risk"] and res["hit_at"] == "@", res
-    print("  @any 模式 PASS")
-
-
-def test_at_off_mode():
-    print("=== test_at_off_mode ===")
-    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[], at_trigger_mode="off")
-    res = r.assess("DingTalk", "前端群", "@所有人 注意")
-    assert not res["high_risk"], f"off 模式不应弹, got {res}"
-    print("  @off 模式 PASS")
-
-
-def test_at_extra_keywords():
-    print("=== test_at_extra_keywords ===")
-    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[],
-                     at_trigger_mode="all", at_all_keywords=["@所有人"],
-                     at_extra_keywords=["@老板", "@王总"])
-    # 用户自定义@词生效
-    res = r.assess("DingTalk", "前端群", "@老板 这个方案您看下")
-    assert res["high_risk"] and res["hit_at"] == "@老板", res
-    # 不在列表的普通@不弹
-    res = r.assess("DingTalk", "前端群", "@小李 好的")
-    assert not res["high_risk"], res
-    print("  @自定义词 PASS")
-
-
-def test_at_placeholder_for_real_mention():
-    print("=== test_at_placeholder_for_real_mention ===")
-    # 钉钉真实@提及 UIA 读不到人名, uia.py 用 "@某人" 占位.
-    # mode=all 时, 占位应命中 (因为是 UIA 探测到的真实提及控件).
-    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[],
-                     at_trigger_mode="all", at_all_keywords=["@所有人"])
-    res = r.assess("DingTalk", "前端群", "通知 @某人 明天开会")
-    assert res["high_risk"], f"真实@提及占位应命中, got {res}"
-    assert res["hit_at"] == "@某人", res
-    # mode=off 时占位也不弹
-    r2 = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[], at_trigger_mode="off")
-    res = r2.assess("DingTalk", "前端群", "@某人 注意")
-    assert not res["high_risk"], res
-    # mode=any 时占位也命中
-    r3 = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[], at_trigger_mode="any")
-    res = r3.assess("DingTalk", "前端群", "@某人 注意")
-    assert res["high_risk"] and res["hit_at"] == "@", res
-    print("  @某人占位 PASS")
 
 
 def test_high_risk_group():
@@ -282,16 +211,14 @@ def test_combined_high_risk():
     print("=== test_combined_high_risk ===")
     # 多个原因同时命中
     r = RiskAssessor(switch_threshold_seconds=0, sensitive_words=["工资"],
-                     at_trigger_mode="all", at_all_keywords=["@所有人"],
                      high_risk_group_keywords=["客户"],
                      quiet_hours={"enabled": True, "start": "00:00", "end": "23:59"})
     r.update_last_target("DingTalk", "技术群")
-    res = r.assess("DingTalk", "客户群", "@所有人 本月工资已发")
+    res = r.assess("DingTalk", "客户群", "本月工资已发")
     assert res["high_risk"]
     reasons = "; ".join(res["reasons"])
     assert "聊天对象" in reasons
     assert "工资" in reasons
-    assert "@所有人" in reasons
     assert "客户" in reasons
     assert "非工作时间" in reasons
     print(f"  多原因组合 PASS ({len(res['reasons'])} 个)")
@@ -307,11 +234,6 @@ if __name__ == "__main__":
     test_last_target_updated_on_intercept()
     test_wechat_app_level_only()
     test_update_config()
-    test_at_all_mode()
-    test_at_any_mode()
-    test_at_off_mode()
-    test_at_extra_keywords()
-    test_at_placeholder_for_real_mention()
     test_high_risk_group()
     test_quiet_hours_same_day()
     test_quiet_hours_cross_midnight()

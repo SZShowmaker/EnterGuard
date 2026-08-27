@@ -42,11 +42,6 @@ DEFAULT_SENSITIVE_WORDS = [
     "傻逼", "草泥马", "fuck", "shit", "bitch",
 ]
 
-# @提及检测: "all"=仅@所有人/@all弹(默认), "any"=任何@都弹, "off"=关闭
-DEFAULT_AT_TRIGGER_MODE = "all"
-# 默认视为"@所有人"的关键词 (大小写不敏感, 子串匹配)
-DEFAULT_AT_ALL_KEYWORDS = ["@所有人", "@all", "@全体"]
-
 # 高危群关键词: 群名命中任一则该群每次发送都弹 (不受对象变化逻辑管)
 # 用户可自行补充, 如 "客户", "外部", "全员", "领导"
 DEFAULT_HIGH_RISK_GROUP_KEYWORDS = ["客户", "外部", "全员", "领导", "大群"]
@@ -64,10 +59,6 @@ class AppConfig:
         self.switch_threshold_seconds = 0
         # 敏感词表: 命中任一即高风险 (大小写不敏感, 子串匹配)
         self.sensitive_words = list(DEFAULT_SENSITIVE_WORDS)
-        # @提及检测
-        self.at_trigger_mode = DEFAULT_AT_TRIGGER_MODE
-        self.at_all_keywords = list(DEFAULT_AT_ALL_KEYWORDS)
-        self.at_extra_keywords = []  # 用户自定义的@触发词, 如 "@老板"
         # 高危群关键词: 群名命中则每次必弹
         self.high_risk_group_keywords = list(DEFAULT_HIGH_RISK_GROUP_KEYWORDS)
         # 静默时段 (非工作时间)
@@ -90,12 +81,6 @@ class AppConfig:
                 # 敏感词: 优先用用户配置, 否则保留默认
                 if "sensitive_words" in data:
                     self.sensitive_words = list(data["sensitive_words"])
-                # @提及
-                self.at_trigger_mode = data.get("at_trigger_mode", self.at_trigger_mode)
-                if "at_all_keywords" in data:
-                    self.at_all_keywords = list(data["at_all_keywords"])
-                if "at_extra_keywords" in data:
-                    self.at_extra_keywords = list(data["at_extra_keywords"])
                 # 高危群
                 if "high_risk_group_keywords" in data:
                     self.high_risk_group_keywords = list(data["high_risk_group_keywords"])
@@ -126,9 +111,6 @@ class AppConfig:
                         "test_mode": self.test_mode,
                         "switch_threshold_seconds": self.switch_threshold_seconds,
                         "sensitive_words": self.sensitive_words,
-                        "at_trigger_mode": self.at_trigger_mode,
-                        "at_all_keywords": self.at_all_keywords,
-                        "at_extra_keywords": self.at_extra_keywords,
                         "high_risk_group_keywords": self.high_risk_group_keywords,
                         "quiet_hours": self.quiet_hours,
                         "apps": self.apps,
