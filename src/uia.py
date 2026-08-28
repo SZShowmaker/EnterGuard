@@ -148,9 +148,12 @@ def _collect_text_from_subtree(ctrl, depth=0, max_depth=3):
 
 def get_selected_conversation_index():
     """
-    钉钉/飞书新版为 Qt 自绘, 会话列表项的 Name 为空, UIA 读不到群名.
+    新版钉钉为 Qt 自绘, 会话列表项的 Name 为空, UIA 读不到群名.
     但当前选中的会话项 IsSelected=True, 可用"选中项索引"作为会话指纹,
     检测"切换了会话" (不需要知道群名, 只要索引变化即视为切换).
+
+    微信 PC 虽同为 Qt 自绘, 但会话列表/聊天区/输入框均未暴露给 UIA
+    (控件树只有顶部导航栏), 此函数对微信返回 -1, 群级检测不可用.
 
     返回: 选中项索引(int), 无选中或读取失败返回 -1. 仅 Windows 有效.
     """
@@ -206,6 +209,7 @@ def get_foreground_info():
       1. 标题切分 (老版钉钉/飞书 "群名 - 钉钉")
       2. 选中项索引指纹 (新版钉钉 Qt 自绘读不到群名, 用 "app#索引" 作为伪群名,
          至少能让"聊天对象变化"检测恢复群级; 弹窗显示伪群名供用户辨识)
+      3. 都失败则返回应用名本身 (如 "微信") — 此时群级检测不可用, 仅 app 级切换可检测
     """
     title, cls = get_window_title_and_class()
     group = extract_group_name_from_title(title)
