@@ -126,29 +126,12 @@ def test_update_config():
     print("=== test_update_config ===")
     r = RiskAssessor(switch_threshold_seconds=0, sensitive_words=["工资"])
     r.update_config(switch_threshold_seconds=-1, sensitive_words=["密码"],
-                    high_risk_group_keywords=["客户"], quiet_hours={"enabled": True, "start": "23:00", "end": "07:00"})
+                    quiet_hours={"enabled": True, "start": "23:00", "end": "07:00"})
     assert r.switch_threshold_seconds == -1
     assert r.sensitive_words == ["密码"]
-    assert r.high_risk_group_keywords == ["客户"]
     assert r.quiet_hours["enabled"] is True
     print("  update_config PASS")
 
-
-def test_high_risk_group():
-    print("=== test_high_risk_group ===")
-    r = RiskAssessor(switch_threshold_seconds=-1, sensitive_words=[],
-                     high_risk_group_keywords=["客户", "外部", "全员", "external"])
-    # 群名命中 -> 高风险, 即使对象未变
-    r.update_last_target("DingTalk", "客户A群")
-    res = r.assess("DingTalk", "客户A群", "你好")
-    assert res["high_risk"] and res["hit_group_kw"] == "客户", res
-    # 大小写 (英文词)
-    res = r.assess("DingTalk", "External Partner", "hi")
-    assert res["high_risk"] and res["hit_group_kw"].lower() == "external", res
-    # 未命中 -> 低风险
-    res = r.assess("DingTalk", "内部技术群", "你好")
-    assert not res["high_risk"], res
-    print("  高危群 PASS")
 
 
 def test_quiet_hours_same_day():
@@ -211,7 +194,6 @@ def test_combined_high_risk():
     print("=== test_combined_high_risk ===")
     # 多个原因同时命中
     r = RiskAssessor(switch_threshold_seconds=0, sensitive_words=["工资"],
-                     high_risk_group_keywords=["客户"],
                      quiet_hours={"enabled": True, "start": "00:00", "end": "23:59"})
     r.update_last_target("DingTalk", "技术群")
     res = r.assess("DingTalk", "客户群", "本月工资已发")
@@ -219,7 +201,6 @@ def test_combined_high_risk():
     reasons = "; ".join(res["reasons"])
     assert "聊天对象" in reasons
     assert "工资" in reasons
-    assert "客户" in reasons
     assert "非工作时间" in reasons
     print(f"  多原因组合 PASS ({len(res['reasons'])} 个)")
 
@@ -234,7 +215,6 @@ if __name__ == "__main__":
     test_last_target_updated_on_intercept()
     test_wechat_app_level_only()
     test_update_config()
-    test_high_risk_group()
     test_quiet_hours_same_day()
     test_quiet_hours_cross_midnight()
     test_combined_high_risk()

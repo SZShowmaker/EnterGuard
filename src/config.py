@@ -42,10 +42,6 @@ DEFAULT_SENSITIVE_WORDS = [
     "傻逼", "草泥马", "fuck", "shit", "bitch",
 ]
 
-# 高危群关键词: 群名命中任一则该群每次发送都弹 (不受对象变化逻辑管)
-# 用户可自行补充, 如 "客户", "外部", "全员", "领导"
-DEFAULT_HIGH_RISK_GROUP_KEYWORDS = ["客户", "外部", "全员", "领导", "大群"]
-
 # 静默时段 (非工作时间): 该时段内一律高风险
 DEFAULT_QUIET_HOURS = {"enabled": False, "start": "22:00", "end": "08:00"}
 
@@ -59,8 +55,6 @@ class AppConfig:
         self.switch_threshold_seconds = 0
         # 敏感词表: 命中任一即高风险 (大小写不敏感, 子串匹配)
         self.sensitive_words = list(DEFAULT_SENSITIVE_WORDS)
-        # 高危群关键词: 群名命中则每次必弹
-        self.high_risk_group_keywords = list(DEFAULT_HIGH_RISK_GROUP_KEYWORDS)
         # 静默时段 (非工作时间)
         self.quiet_hours = {
             "enabled": DEFAULT_QUIET_HOURS["enabled"],
@@ -81,9 +75,6 @@ class AppConfig:
                 # 敏感词: 优先用用户配置, 否则保留默认
                 if "sensitive_words" in data:
                     self.sensitive_words = list(data["sensitive_words"])
-                # 高危群
-                if "high_risk_group_keywords" in data:
-                    self.high_risk_group_keywords = list(data["high_risk_group_keywords"])
                 # 静默时段
                 qh = data.get("quiet_hours")
                 if isinstance(qh, dict):
@@ -111,7 +102,6 @@ class AppConfig:
                         "test_mode": self.test_mode,
                         "switch_threshold_seconds": self.switch_threshold_seconds,
                         "sensitive_words": self.sensitive_words,
-                        "high_risk_group_keywords": self.high_risk_group_keywords,
                         "quiet_hours": self.quiet_hours,
                         "apps": self.apps,
                     },

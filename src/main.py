@@ -44,7 +44,6 @@ class App:
         self.risk = RiskAssessor(
             switch_threshold_seconds=self.config.switch_threshold_seconds,
             sensitive_words=self.config.sensitive_words,
-            high_risk_group_keywords=self.config.high_risk_group_keywords,
             quiet_hours=self.config.quiet_hours,
         )
 
@@ -144,20 +143,6 @@ class App:
         ttk.Label(
             row2,
             text="消息含敏感词时必弹 (大小写不敏感, 子串匹配)",
-            font=("微软雅黑", 7),
-            foreground="#6b7280",
-        ).pack(side="left", padx=(8, 0))
-
-        # 高危群
-        row4 = ttk.Frame(risk_frame)
-        row4.pack(fill="x", pady=(6, 0))
-        ttk.Label(row4, text="高危群:", font=("微软雅黑", 8)).pack(side="left")
-        self.group_kw_count_var = tk.StringVar(value=f"当前 {len(self.config.high_risk_group_keywords)} 个")
-        ttk.Label(row4, textvariable=self.group_kw_count_var, font=("微软雅黑", 8), foreground="#2563eb").pack(side="left", padx=(4, 8))
-        ttk.Button(row4, text="编辑高危群词", command=self.edit_high_risk_groups).pack(side="left")
-        ttk.Label(
-            row4,
-            text="群名命中则每次必弹 (不受对象变化逻辑管)",
             font=("微软雅黑", 7),
             foreground="#6b7280",
         ).pack(side="left", padx=(8, 0))
@@ -338,22 +323,6 @@ class App:
             title="编辑敏感词 (每行一个)",
             hint="每行一个词, 大小写不敏感, 子串匹配. 空行自动忽略",
             initial=list(self.config.sensitive_words),
-            on_save=on_save,
-        )
-
-    def edit_high_risk_groups(self):
-        """编辑高危群关键词"""
-        def on_save(words):
-            self.config.high_risk_group_keywords = words
-            self.config.save()
-            self.risk.update_config(high_risk_group_keywords=words)
-            self.group_kw_count_var.set(f"当前 {len(words)} 个")
-            self.log(f"高危群词已更新 -> {len(words)} 个")
-
-        self._edit_word_list(
-            title="编辑高危群关键词 (每行一个)",
-            hint="群名命中任一关键词则每次发送都弹 (不受对象变化逻辑管)\n如: 客户/外部/全员/领导; 每行一个, 空行忽略",
-            initial=list(self.config.high_risk_group_keywords),
             on_save=on_save,
         )
 
