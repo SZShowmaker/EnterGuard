@@ -3,6 +3,7 @@ config.py - 全局配置, 支持多应用扩展
 """
 import json
 import os
+import sys
 
 # 默认监控的应用列表, 关键词用于匹配窗口标题/类名
 # 后续要加飞书/微信, 只需在这里加一项, 或通过GUI动态修改
@@ -27,7 +28,18 @@ DEFAULT_APPS = {
     },
 }
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.json")
+
+def _resolve_config_path():
+    """配置文件路径: 优先放 exe 所在目录 (打包后), 否则源码上级目录 (开发时)"""
+    # PyInstaller 单文件模式: sys.executable 是 exe 路径, sys.frozen 存在
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.join(os.path.dirname(__file__), "..")
+    return os.path.join(base, "config.json")
+
+
+CONFIG_PATH = _resolve_config_path()
 
 # 默认敏感词表 (高危/隐私 + 常见脏话), 用户可在 config.json 或 GUI 中增删
 # 匹配为子串包含 (大小写不敏感), 词越短误伤越大, 故最短取2字
@@ -40,6 +52,7 @@ DEFAULT_SENSITIVE_WORDS = [
     "转账", "汇款", "打款", "收款",
     # 常见脏话 (保守收录, 用户可自行扩充)
     "傻逼", "草泥马", "fuck", "shit", "bitch",
+    "脑残","日天","他妈","畜生","操你妈","去你妈","去死","滚蛋","滚开",
 ]
 
 # 静默时段 (非工作时间): 该时段内一律高风险

@@ -20,16 +20,32 @@
 
 ## 安装 (Windows)
 
+方式一: 直接运行源码 (需 Python 3.9+)
+
 ```bat
 # 1. 克隆或拷贝项目到 Windows
 cd EnterGuard
 
-# 2. 安装依赖 (需要 Python 3.9+)
+# 2. 安装依赖
 pip install -r requirements.txt
 # requirements: pywin32, comtypes, uiautomation
 
 # 3. 运行
 python src/main.py
+```
+
+方式二: 打包成 exe (无需 Python 环境, 双击即用)
+
+```bat
+# 1. 先装依赖 + PyInstaller
+pip install -r requirements.txt
+pip install pyinstaller
+
+# 2. 打包
+build_exe.bat
+
+# 3. 产物在 dist\EnterGuard.exe, 双击即可运行
+#    config.json 会在 exe 同目录自动生成
 ```
 
 首次运行建议保持 `测试模式=开启`, 验证:
